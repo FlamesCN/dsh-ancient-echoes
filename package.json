@@ -1,0 +1,64 @@
+{
+  "name": "dsh-ancient-echoes",
+  "version": "0.1.0",
+  "description": "Ancient Echoes BaZi and Chinese metaphysics tools for DeepSeek Harness: a thin, read-only pass-through to the AE Tools API.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "ancient-echoes",
+    "bazi",
+    "chinese-metaphysics",
+    "metaphysics",
+    "astrology",
+    "ziwei",
+    "almanac",
+    "divination"
+  ],
+  "homepage": "https://www.ancientechoes.ai/developers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FlamesCN/dsh-ancient-echoes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FlamesCN/dsh-ancient-echoes/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "generate": "node scripts/generate-tools.mjs",
+    "refresh-schema": "node scripts/generate-tools.mjs --refresh",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.5 <5",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
