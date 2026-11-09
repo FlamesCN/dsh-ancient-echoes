@@ -1,7 +1,8 @@
 # dsh-ancient-echoes 的 profile 层：把插件挂进 harness。
 # 配置项（可选）：
 #   config:
-#     apiKey: ''                       # 留空则读环境变量 ANCIENT_ECHOES_TOKEN
+#     apiKeyRef: ANCIENT_ECHOES_TOKEN  # 在 dsh 设置里保存同名凭据；配置只写名字
+#     apiKey: ''                       # 仅本地调试的明文覆盖（--dump-config 会打印）
 #     baseUrl: https://www.ancientechoes.ai
 #     tools: core                      # core | all | [bazi.calculate_chart, ...]
 #     toolPrefix: ''

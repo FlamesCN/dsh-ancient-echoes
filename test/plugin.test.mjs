@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { after, before, test } from 'node:test'
 import { apply, name as pluginName, Config } from '../lib/index.js'
+import { AE_TOOLS } from '../lib/tools.generated.js'
 
 /** 起一个最小 AE Tools API 假服务，记录收到的请求。 */
 const requests = []
@@ -30,14 +31,42 @@ after(async () => {
   await new Promise((resolve) => server.close(resolve))
 })
 
-function boot(overrides = {}) {
+/**
+ * 启动插件。`credentialStore` 模拟 dsh 凭据服务（ctx.get('credentials')）。
+ * 传 `null` 表示组合里没有该服务。
+ */
+function boot(overrides = {}, credentialStore = null) {
   const registered = new Map()
-  const ctx = { tools: { register: (definition) => registered.set(definition.name, definition) } }
+  const ctx = {
+    tools: { register: (definition) => registered.set(definition.name, definition) },
+    get: (serviceName) => (serviceName === 'credentials' ? credentialStore ?? undefined : undefined),
+  }
   apply(ctx, { ...Config(), apiKey: 'sk-test', baseUrl, tools: ['almanac.get_day'], ...overrides })
   return registered
 }
 
 const exec = () => ({ signal: new AbortController().signal })
+
+/** 按编译后的 JSON Schema 造最小合法入参：只为通过 defineTool 的入参校验。 */
+function minimalArgs(schema) {
+  const value = (node) => {
+    if (Array.isArray(node.enum) && node.enum.length) return node.enum[0]
+    if (typeof node.const !== 'undefined') return node.const
+    if (node.type === 'string') return 'x'
+    if (node.type === 'integer' || node.type === 'number') return 1
+    if (node.type === 'boolean') return true
+    if (node.type === 'array') return []
+    if (node.type === 'object') return minimalArgs(node)
+    return null
+  }
+  const properties = schema.properties ?? {}
+  const required = new Set(Array.isArray(schema.required) ? schema.required : [])
+  return Object.fromEntries(
+    Object.entries(properties)
+      .filter(([key]) => required.has(key))
+      .map(([key, node]) => [key, value(node)]),
+  )
+}
 
 test('默认注册核心集并始终带使用指南', () => {
   const tools = boot({ tools: 'core' })
@@ -168,4 +197,66 @@ test('网络不可达时归一为 network_error', async () => {
     assert.equal(error.code, 'network_error')
     return true
   })
+})
+
+test('凭据库中的 key 生效，且轮换后无需重启即可用新值', async () => {
+  requests.length = 0
+  delete process.env.ANCIENT_ECHOES_TOKEN
+  const store = { value: 'sk-store-1', resolve: async () => ({ value: store.value, source: 'store' }) }
+  responder = () => ({
+    status: 200,
+    body: { success: true, api_version: '1.3.0', request_id: 'r', calculation: {}, data: {} },
+  })
+  const tool = boot({ apiKey: '' }, store).get('almanac_get_day')
+
+  await tool.execute({ date: '2026-11-09' }, exec())
+  assert.equal(requests[0].headers.authorization, 'Bearer sk-store-1')
+
+  store.value = 'sk-store-2'
+  await tool.execute({ date: '2026-11-09' }, exec())
+  assert.equal(requests[1].headers.authorization, 'Bearer sk-store-2')
+})
+
+test('凭据引用名可配置，非法引用名在加载期失败', async () => {
+  requests.length = 0
+  delete process.env.AE_TEST_TOKEN
+  const store = { resolve: async (ref) => (ref === 'AE_TEST_TOKEN' ? { value: 'sk-ref' } : undefined) }
+  responder = () => ({
+    status: 200,
+    body: { success: true, api_version: '1.3.0', request_id: 'r', calculation: {}, data: {} },
+  })
+  const tool = boot({ apiKey: '', apiKeyRef: 'AE_TEST_TOKEN' }, store).get('almanac_get_day')
+  await tool.execute({ date: '2026-11-09' }, exec())
+  assert.equal(requests[0].headers.authorization, 'Bearer sk-ref')
+
+  assert.throws(() => boot({ apiKeyRef: 'bad-ref' }, store), /POSIX 环境变量名/)
+})
+
+test('没有任何凭据时，所有远端工具都拒绝且不发请求', async () => {
+  requests.length = 0
+  delete process.env.ANCIENT_ECHOES_TOKEN
+  const tools = boot({ tools: 'all', apiKey: '' }, { resolve: async () => undefined })
+  const remote = AE_TOOLS.map((tool) => tools.get(tool.dshName))
+  assert.equal(remote.length, 38)
+  for (const tool of remote) {
+    assert.ok(tool, '每个 AE 工具都应注册')
+    await assert.rejects(
+      tool.execute(minimalArgs(tool.parameters ?? {}), exec()),
+      (error) => {
+        assert.match(error.message, /Ancient Echoes 未鉴权/)
+        assert.match(error.message, /ANCIENT_ECHOES_TOKEN/)
+        return true
+      },
+    )
+  }
+  assert.equal(requests.length, 0, '未鉴权时不得发出任何远端请求')
+})
+
+test('使用指南是本地工具，不需要凭据也不发请求', async () => {
+  requests.length = 0
+  delete process.env.ANCIENT_ECHOES_TOKEN
+  const guide = boot({ apiKey: '' }, { resolve: async () => undefined }).get('ancient_echoes_guide')
+  const text = await guide.execute({}, exec())
+  assert.match(text, /Ancient Echoes 工具使用指南/)
+  assert.equal(requests.length, 0)
 })

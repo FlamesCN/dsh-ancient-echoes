@@ -41,7 +41,9 @@
     "prepare": "npm run build",
     "generate": "node scripts/generate-tools.mjs",
     "refresh-schema": "node scripts/generate-tools.mjs --refresh",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "check:pack": "node scripts/check-pack.mjs",
+    "prepublishOnly": "npm run check:pack"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.5"

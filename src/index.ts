@@ -29,9 +29,19 @@ const CORE_TOOLS: readonly string[] = [
   'divination.preview_meihua',
 ]
 
+/**
+ * DSH 凭据服务的最小接口：`resolve` 按引用名取回密钥（store > 环境变量 > .env）。
+ * 只取我们需要的部分，避免把整个凭据包变成运行时依赖。
+ */
+interface CredentialService {
+  resolve(ref: string): Promise<{ value?: string; source?: string } | undefined>
+}
+
 export interface Config {
-  /** AE Web API Key（sk-…）。留空时读 ANCIENT_ECHOES_TOKEN。 */
+  /** 直写密钥（仅本地临时用）。留空时按 apiKeyRef 从 DSH 凭据库/环境变量解析。 */
   apiKey?: string
+  /** 凭据引用名（POSIX 环境变量名），默认 ANCIENT_ECHOES_TOKEN。 */
+  apiKeyRef: string
   baseUrl: string
   /** 'core' | 'all' | 显式工具名数组（AE 名或 DSH 名均可）。 */
   tools: 'core' | 'all' | string[]
@@ -43,7 +53,12 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  apiKey: Schema.string().description('Ancient Echoes Web API Key（sk-…）；留空则读环境变量 ANCIENT_ECHOES_TOKEN').default(''),
+  apiKey: Schema.string()
+    .description('直写 Web API Key（sk-…）；留空时按 apiKeyRef 从 DSH 凭据库或环境变量解析')
+    .default(''),
+  apiKeyRef: Schema.string()
+    .description('凭据引用名；在 dsh 设置里保存同名凭据，配置里只出现名字')
+    .default('ANCIENT_ECHOES_TOKEN'),
   baseUrl: Schema.string().description('AE 站点根地址').default('https://www.ancientechoes.ai'),
   tools: Schema.union(['core', 'all', Schema.array(Schema.string())])
     .description("注册哪些工具：'core' 默认核心集，'all' 全量，或显式工具名数组")
@@ -75,11 +90,37 @@ function resolveSelection(selection: Config['tools']): Set<string> {
   return resolved
 }
 
+/** 取 DSH 凭据服务；自定义组合没有该服务时返回 undefined，退回环境变量。 */
+function credentialsOf(ctx: Context): CredentialService | undefined {
+  const candidate = ctx.get('credentials') as CredentialService | undefined
+  return candidate && typeof candidate.resolve === 'function' ? candidate : undefined
+}
+
 export function apply(ctx: Context, config: Config) {
-  const apiKey = (config.apiKey ?? '').trim() || (process.env.ANCIENT_ECHOES_TOKEN ?? '').trim()
   const userAgent = `dsh-ancient-echoes/${packageJson.version}`
   const prefix = config.toolPrefix ?? ''
   const selected = resolveSelection(config.tools ?? 'core')
+  const ref = (config.apiKeyRef ?? '').trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)) {
+    throw new Error(`dsh-ancient-echoes: apiKeyRef "${ref}" 必须是 POSIX 环境变量名（字母/数字/下划线，且不以数字开头）`)
+  }
+  const explicitKey = (config.apiKey ?? '').trim()
+
+  /**
+   * 每次调用都解析一次凭据：dsh 凭据库里的值轮换后立即生效，无需重启。
+   * 解析顺序：config.apiKey（显式覆盖）> 凭据服务（store > env > .env）> 进程环境兜底。
+   */
+  async function requireApiKey(): Promise<string> {
+    if (explicitKey) return explicitKey
+    // 每次调用重新取服务：插件 apply 时凭据服务可能尚未挂载（自定义组合/加载顺序）。
+    const stored = ((await credentialsOf(ctx)?.resolve(ref))?.value ?? '').trim()
+    if (stored) return stored
+    const fallback = (process.env[ref] ?? '').trim()
+    if (fallback) return fallback
+    throw new Error(
+      `Ancient Echoes 未鉴权：没有可用的凭据 ${ref}。在 dsh 设置里保存该凭据（配置只出现名字，不落明文），或 export ${ref}=sk-…；临时也可给插件 config.apiKey。`,
+    )
+  }
 
   for (const spec of AE_TOOLS) {
     if (!selected.has(spec.aeName)) continue
@@ -117,11 +158,7 @@ export function apply(ctx: Context, config: Config) {
           },
         },
         async execute(args, exec) {
-          if (!apiKey) {
-            throw new Error(
-              'Ancient Echoes API Key 未配置：设置环境变量 ANCIENT_ECHOES_TOKEN，或在 profile 的 cordis.patch.yml 中给 dsh-ancient-echoes 行配置 config.apiKey（Web API Key，sk-…）。',
-            )
-          }
+          const apiKey = await requireApiKey()
           const result = await invokeTool({
             baseUrl: config.baseUrl,
             apiKey,

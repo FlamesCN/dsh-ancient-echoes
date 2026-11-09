@@ -31,22 +31,26 @@ Then give the plugin an API key (Web API Key, `sk-…`, from
 export ANCIENT_ECHOES_TOKEN=sk-...
 ```
 
-or pin it in the profile's own `~/.dsh/profiles/<name>/cordis.patch.yml`:
+or save it in the harness credential store (recommended — the configuration
+only ever names the reference, never the value):
 
-```yaml
-- id: dsh-ancient-echoes
-  name: dsh-ancient-echoes
-  config:
-    apiKey: sk-...
-```
+1. open the dsh web UI → Settings → Models/credentials, and store
+   `ANCIENT_ECHOES_TOKEN`; or
+2. from a plugin/console session: `await ctx.credentials.set(credentialRef('ANCIENT_ECHOES_TOKEN'), 'sk-…')`.
 
-A user-level `$DSH_HOME/cordis.patch.yml` works the same way for every profile.
+The store lives in `$DSH_HOME/.credentials.yaml` (readable only by your OS user),
+wins over environment variables, and a rotated value applies to the next call
+without restarting the harness.
+
+`config.apiKey` still exists as an explicit override, but it is plain text and
+`dsh --dump-config` prints it — prefer the credential store.
 
 ## Configuration
 
 | Key | Default | Meaning |
 |---|---|---|
-| `apiKey` | `''` → `$ANCIENT_ECHOES_TOKEN` | Bearer Web API Key. Never baked into the package. |
+| `apiKeyRef` | `ANCIENT_ECHOES_TOKEN` | Credential reference resolved per call from the dsh credential store, then the environment. |
+| `apiKey` | `''` | Explicit plain-text override (shown by `--dump-config`; for local debugging only). |
 | `baseUrl` | `https://www.ancientechoes.ai` | Site root; point at a local backend for development. |
 | `tools` | `core` | `core`, `all` (all 38 registry tools), or an explicit array of AE/dsh tool names. |
 | `toolPrefix` | `''` | Prefix every registered tool name, e.g. `ae_`. |
@@ -94,15 +98,23 @@ Errors keep the AE machine-readable code and add an actionable hint:
 | `unauthorized` | Missing or invalid key. |
 | `invalid_argument`, `tool_invocation_failed` | Fix the arguments; not a service outage. |
 
-## Scope and safety
+## Auth and safety
 
+- **Every remote tool requires a credential.** Each call resolves `apiKeyRef`
+  (credential store → environment) and refuses before any network I/O when it is
+  absent. The only credential-free tool is `<prefix>ancient_echoes_guide`, which
+  returns bundled text and makes no request.
+- The credential is resolved per call and never echoed into tool output, logs, or
+  rendered values. A rotated stored value applies on the next call.
 - Read-only: the plugin registers tools only. It never writes files, runs
   shells, or reaches the network except `baseUrl`.
-- The API key is read from config or the environment and never echoed into tool
-  output. Birth data travels only as the arguments of one call.
+- Birth data travels only as the arguments of one call; nothing is cached.
 - Results are reference material: structured evidence plus calculation
   versions. No deterministic predictions, no medical / legal / investment
   advice.
+- **What ships:** compiled `lib/` only — no `src/`, no schema snapshot, no tests,
+  no `.env`, no credentials. `npm run check:pack` fails the pack if the tarball
+  grows an unexpected file or matches a secret pattern.
 - dsh is pre-1.0 and will break compatibility; `engines.dsh` is pinned to
   `<0.3.0` and every release should be validated against a concrete dsh
   version.
@@ -112,7 +124,8 @@ Errors keep the AE machine-readable code and add an actionable hint:
 ```sh
 npm install
 npm run build
-npm test                     # mock AE server: registration, pass-through, errors
+npm test                     # mock AE server: registration, pass-through, auth, errors
+npm run check:pack           # tarball allowlist + secret scan (runs in CI)
 npm run generate             # regenerate src/tools.generated.ts from the snapshot
 npm run refresh-schema       # refetch the snapshot from production, then generate
 ```
