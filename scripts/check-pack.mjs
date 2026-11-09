@@ -18,10 +18,36 @@ const SECRET_PATTERNS = [
   [/\/Users\/[A-Za-z0-9._-]+\//, '本机绝对路径'],
 ]
 
-// npm 12 输出 `{ "<name>": { files, entryCount } }`；prepare 的输出只可能在它之前。
+// npm 11 输出 `[{…}]`，npm 12 输出 `{ "<name>": {…} }`；prepare 的输出只可能出现在 JSON 之前。
 const raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: root, encoding: 'utf8' })
-const parsed = JSON.parse(raw.slice(raw.indexOf('{')))
-const { files } = Object.values(parsed)[0]
+
+/** 从混合输出里截出第一个完整 JSON 值（字符串感知的括号配对）。 */
+function extractJson(text) {
+  const start = text.search(/[[{]/)
+  if (start < 0) throw new Error('npm pack 没有输出 JSON')
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') inString = true
+    else if (char === '[' || char === '{') depth += 1
+    else if (char === ']' || char === '}') {
+      depth -= 1
+      if (depth === 0) return JSON.parse(text.slice(start, i + 1))
+    }
+  }
+  throw new Error('npm pack 的 JSON 不完整')
+}
+
+const parsed = extractJson(raw)
+const { files } = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
 const problems = []
 
 for (const file of files) {
